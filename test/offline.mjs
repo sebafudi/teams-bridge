@@ -85,5 +85,23 @@ await step('older rows (a bare Telegram chat id) still edit through telegram', a
   await tg.edit('12345', 777, 'legacy edit');
   assert.equal(tg.dryLog.length, before + 1); assert.equal(tg.dryLog.at(-1).messageId, 777);
 });
+await step('exec with a prompt: the agent gets the guarded prompt, its output becomes a notification', async () => {
+  wf(P.configFile, JSON.stringify({ owner: { name: 'Test Owner' } }));
+  const agent = `${P.state}/agent.mjs`;
+  // A fake agent: prints whether the prompt carried the task, the safety rules and the chat context.
+  wf(agent, `import { readFileSync } from 'node:fs'; const t = readFileSync(0, 'utf8'); console.log(['TASK', 'Never send anything on Teams', '<teams_context'].map(k => k + '=' + t.includes(k)).join(' '));`);
+  wf(`${P.rulesDir}/exec-agent.json`, JSON.stringify({ id: 'exec-agent', owner: 'test', match: { kind: 'dm' },
+    actions: [{ type: 'exec', command: [process.execPath, agent], prompt: 'TASK: look into this', stdin: 'prompt', output: 'notify' }] }));
+  const c = '19:offlinetest_dm@unq.gbl.spaces';
+  d.prepare("INSERT OR REPLACE INTO convs (id, kind, title) VALUES (?, 'dm', 'Test Carol')").run(c);
+  kvSet(`convinfo:${c}`, { at: Date.now(), title: 'Test Carol', kind: 'dm', members: [], memberCount: 2 });
+  const before = tg.dryLog.length;
+  await ingestMessage({ ...msg(c, base + 500e3, 3, 'Test Carol', 'Can you check the export job?'), threadtype: 'chat' }, { source: 'test' });
+  for (let i = 0; i < 40 && !tg.dryLog.slice(before).some(x => /exec-agent/.test(x.html)); i++) await new Promise(r => setTimeout(r, 250));
+  const sent = tg.dryLog.slice(before).find(x => /exec-agent/.test(x.html));
+  assert.ok(sent, 'output notification sent');
+  assert.match(sent.html, /TASK=true Never send anything on Teams=true &lt;teams_context=true/);
+  assert.equal(sent.silent, true);
+});
 console.log(`${n} scenarios passed`);
 process.exit(0);

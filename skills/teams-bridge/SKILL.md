@@ -78,6 +78,10 @@ Other harnesses use the alternatives below.
   { "type": "exec", "command": ["/path/to/on-teams-event"], "timeout_sec": 60, "max_per_hour": 30 }
 ]
 ```
+- `exec` runs `command` (argv, no shell, `cwd` optional) with the event JSON on stdin. With `prompt`,
+  the JSON also gets `prompt`: the full agent prompt (the task, the safety rules below, the chat
+  context). `stdin: "prompt"` sends only that text (e.g. `["claude", "-p"]`, `["codex", "exec", "-"]`);
+  `output: "notify"` sends what the command printed to the owner. `timeout_sec` up to 300.
 - `spawn` `via: "t3"` runs `t3 thread start` in a T3 Code project (path or id); optional
   `worktree` (base ref for a new git worktree), `branch`, `provider` + `model` (default: the
   project's default). Later matches in the same chat within `follow_up_minutes` (default 60) are

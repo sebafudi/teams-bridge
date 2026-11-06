@@ -27,8 +27,10 @@ your status and unread counts come only from your real devices.
 
 - macOS or Linux, Node.js 24 or newer (built-in `node:sqlite` and `WebSocket`; no npm packages).
 - Chrome, Chromium, Edge or Brave, for the sign-in and the daily token renewal (headless).
-- Optional: the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI (`claude`, signed
-  in) for summaries and model-judged rules; without it, rules with `classify` notify unfiltered.
+- Optional: a model for summaries and model-judged rules: the [Claude Code](https://docs.claude.com/en/docs/claude-code)
+  CLI (default, signed in, no API key), any OpenAI-compatible API (OpenAI, OpenRouter, or a local
+  model through Ollama or LM Studio), the Anthropic API, or your own command. Without one, rules
+  with `classify` notify unfiltered and notifications quote the message instead of summarizing it.
 - Optional: a notification channel (Telegram, ntfy, webhook or a command); without one,
   notifications are events for agents.
 
@@ -74,11 +76,13 @@ one folder (config at the top, state in `state/`).
 | Key | Default | Meaning |
 |---|---|---|
 | `owner.name`, `owner.about` | name from your sign-in, empty | how model prompts refer to you; `about` is one line of context ("backend developer on the payments team") |
+| `owner.language` | English | language of summaries and reply notes, e.g. `"Polish"` |
+| `locale` | system | how times are shown, e.g. `"en-GB"` (24-hour) |
 | `notify.delayMinutes` | 3 | wait before notifying; skipped if you read it meanwhile |
 | `notify.summary` | `llm` | `plain` sends no message text and makes no model call |
 | `notify.maxPerHour` | 20 | hard cap |
 | `notify.channels` | `telegram` if configured, else none | `telegram`, `ntfy`, `webhook`, `command`; several are allowed |
-| `llm.command`, `llm.model` | `claude`, `haiku` | model CLI and model |
+| `llm.provider`, `llm.model` | `claude-cli`, provider default | see [Models](#models) |
 | `llm.maxCallsPerHour` | 200 | budget for live traffic (rule replays have their own, 300) |
 | `browser.path` | found automatically | Chrome/Chromium/Edge binary |
 | `browser.profile` | state folder | browser profile with the Teams login |
@@ -142,6 +146,25 @@ Webhook and command both receive this JSON (POST body or stdin):
 line on stdout) to receive that id as `ref` with later edits of the same message, and as
 `reply_to` for follow-ups (the ⚠️ "a reply may need you" ping). A command must exit 0 within 30
 seconds; a webhook must answer 2xx within 20 seconds.
+
+## Models
+
+Model calls are small and isolated: one rule question, one summary sentence or one reply verdict,
+each with a JSON schema for the answer. Pick the backend with `llm.provider`:
+
+| Provider | Config | Notes |
+|---|---|---|
+| `claude-cli` (default) | `{ "llm": { "model": "haiku" } }` | the `claude` CLI, signed in; runs with no tools, settings, MCP or session |
+| `openai` | `{ "llm": { "provider": "openai", "model": "gpt-4.1-mini" } }` | key from `OPENAI_API_KEY` (or `apiKeyEnv`) |
+| `openai`, local | `{ "llm": { "provider": "openai", "baseUrl": "http://127.0.0.1:11434/v1", "model": "qwen2.5:7b" } }` | Ollama; LM Studio is `http://127.0.0.1:1234/v1`. Nothing leaves your machine. |
+| `openai`, other | `"baseUrl": "https://openrouter.ai/api/v1"` | any OpenAI-compatible server; `"jsonSchema": false` if it rejects `json_schema` output |
+| `anthropic` | `{ "llm": { "provider": "anthropic" } }` | key from `ANTHROPIC_API_KEY`; default model `claude-haiku-5-5` |
+| `command` | `{ "llm": { "provider": "command", "argv": ["/path/to/model"] } }` | stdin `{system, prompt, schema, model}`, stdout the JSON answer |
+
+A rule's `classify.model` overrides `llm.model` for that rule. Spending is capped per hour
+(`llm.maxCallsPerHour`, with a separate budget for rule replays), and verdicts are cached, so a
+message is classified once per rule version. Message text goes to the model you pick: with a
+hosted API that means your work messages leave your machine.
 
 ### Remote machine, no screen
 
@@ -258,8 +281,17 @@ any harness), MCP `teams_wait` long-polls, and the MCP server declares Claude Co
 `claude/channel` capability so `teams_subscribe {push: true}` or `teams-bridge mcp --channel NAME`
 pushes events as `notifications/claude/channel` (Claude Code Channels research preview; needs
 `--dangerously-load-development-channels server:teams-bridge` in an interactive session).
-Without any live session, rule actions react directly: `exec` runs an argv command with the event
-JSON on stdin (start whatever agent you use from there), and `spawn` has two built-in launchers:
+Without any live session, rule actions react directly. `exec` runs an argv command (no shell) with
+the event JSON on stdin. Give it a `prompt` and it also gets the full agent prompt (your task, the
+safety rules, and the chat context); with `"stdin": "prompt"` only that text, so a CLI agent can
+take it directly, and `"output": "notify"` sends what it prints back to you as a notification:
+
+```json
+{ "type": "exec", "command": ["claude", "-p"], "cwd": "~/code/my-service", "stdin": "prompt", "output": "notify",
+  "prompt": "Find out why this is failing and suggest a reply.", "timeout_sec": 300, "max_per_hour": 4 }
+```
+
+`spawn` has two built-in launchers for longer sessions:
 a T3 Code thread (`t3 thread start` with the newest `~/.t3/runtime/versions/*/t3`, follow-ups in
 the same chat go to the same thread via `t3 thread send`, and any other new messages there, the
 owner's included, are forwarded in 90-second batches so the session can see that someone already
