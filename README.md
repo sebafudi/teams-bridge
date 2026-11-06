@@ -7,13 +7,13 @@ A small daemon receives your messages over the same push channel the Teams web a
 them in SQLite and runs rules on them:
 
 - **Notifications**: messages that matter (DMs, @mentions, group messages a model judges to need
-  you) become one-line Telegram summaries after a short delay, are skipped if you read them in
-  Teams meanwhile, are edited to "read" when you read them later, and are updated when someone
-  else answers ("↪ Alex replied: looks handled").
+  you) become one-line summaries on Telegram, ntfy, a webhook or any command you choose, after a
+  short delay. They are skipped if you read the message in Teams meanwhile, marked "read" when you
+  read it later, and updated when someone else answers ("↪ Alex replied: looks handled").
 - **Agents**: a CLI and an MCP server to read chats, follow an event stream with a cursor, and
   subscribe to rule matches; rule actions can start agent sessions or run commands.
 - **Drafts, never direct sends**: agents can only propose a message; you approve or edit it on a
-  page linked from Telegram.
+  page linked from a notification.
 
 It never sends "active" signals, never registers presence and never moves your read markers, so
 your status and unread counts come only from your real devices.
@@ -29,7 +29,8 @@ your status and unread counts come only from your real devices.
 - Chrome, Chromium, Edge or Brave, for the sign-in and the daily token renewal (headless).
 - Optional: the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI (`claude`, signed
   in) for summaries and model-judged rules; without it, rules with `classify` notify unfiltered.
-- Optional: a Telegram bot for notifications; without it, notifications are events for agents.
+- Optional: a notification channel (Telegram, ntfy, webhook or a command); without one,
+  notifications are events for agents.
 
 ## Quick start
 
@@ -46,15 +47,8 @@ Linux, `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.sebafu
 on macOS), or run `teams-bridge daemon` in a terminal. Running `./install.sh` again updates the
 code and restarts the service.
 
-**Telegram** (optional): create a bot with @BotFather, send it a message, then put the token and
-your chat id in `~/.config/teams-bridge/telegram.env` (mode 600):
-
-```
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_CHAT_ID=123456789
-```
-
-`teams-bridge notify-test` checks it.
+**Notifications** (optional): pick one or more channels, see [Notification channels](#notification-channels).
+`teams-bridge notify-test` checks them.
 
 **Agents**: copy `skills/teams-bridge` to your agent's skills folder (e.g. `~/.claude/skills/`),
 and register the MCP server: `claude mcp add --scope user teams-bridge -- teams-bridge mcp`.
@@ -67,7 +61,7 @@ Everything lives in your home folder, outside the code:
 |---|---|
 | Settings | `~/.config/teams-bridge/config.json` (see `config.example.json`) |
 | Rules | `~/.config/teams-bridge/rules.d/*.json` (defaults from `rules.example/`) |
-| Telegram credentials | `~/.config/teams-bridge/telegram.env`, or `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in the environment |
+| Telegram credentials (if you use it) | `~/.config/teams-bridge/telegram.env`, or `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in the environment |
 | Notes for your agents | `~/.config/teams-bridge/AGENT_NOTES.md` (optional; the skill tells agents to read it) |
 | Token, database, logs | `~/.local/state/teams-bridge/` (0700; the token file is 0600) |
 | Browser profile with the Teams login | `~/.local/state/teams-bridge/browser-profile` |
@@ -83,6 +77,7 @@ one folder (config at the top, state in `state/`).
 | `notify.delayMinutes` | 3 | wait before notifying; skipped if you read it meanwhile |
 | `notify.summary` | `llm` | `plain` sends no message text and makes no model call |
 | `notify.maxPerHour` | 20 | hard cap |
+| `notify.channels` | `telegram` if configured, else none | `telegram`, `ntfy`, `webhook`, `command`; several are allowed |
 | `llm.command`, `llm.model` | `claude`, `haiku` | model CLI and model |
 | `llm.maxCallsPerHour` | 200 | budget for live traffic (rule replays have their own, 300) |
 | `browser.path` | found automatically | Chrome/Chromium/Edge binary |
@@ -92,6 +87,61 @@ one folder (config at the top, state in `state/`).
 | `drafts.host`, `drafts.port`, `drafts.baseUrl` | `127.0.0.1`, 6095, derived | approval pages |
 | `spawn.defaultVia` | none | `t3` or `agent`, for rules that leave out `spawn.via` |
 | `places` | `{}` | named groups of chats for rules (`"@team"`) |
+
+## Notification channels
+
+Notifications are written once and sent to every channel in `notify.channels`. Channels that can
+edit a message (Telegram, webhook, command) also get the later updates: "↪ X replied" with a
+verdict, and "read in Teams". Without any channel, notifications are `notify_sent` events with
+their text, for agents that subscribe; drafts then cannot be proposed, because the approval link
+would reach nobody.
+
+**Telegram**: create a bot with @BotFather, send it a message, then put the token and your chat id
+in `~/.config/teams-bridge/telegram.env` (mode 600). Another program can keep polling the same bot.
+
+```
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=123456789
+```
+
+**ntfy** (push to the [ntfy](https://ntfy.sh) phone and desktop apps, no account needed):
+
+```json
+{ "notify": { "channels": ["ntfy"], "ntfy": { "topic": "a-long-random-name-only-you-know" } } }
+```
+
+Anyone who knows a topic on the public ntfy.sh server can read it, and summaries describe your work
+messages. Use a long random topic, a self-hosted server (`url`, `token`), or `notify.summary: "plain"`.
+ntfy messages are not updated later.
+
+**Webhook** (Slack/Discord/Home Assistant bridges, your own server):
+
+```json
+{ "notify": { "channels": ["webhook"], "webhook": { "url": "https://example.com/teams", "headers": { "Authorization": "Bearer ..." } } } }
+```
+
+**Command** (anything else; argv, no shell):
+
+```json
+{ "notify": { "channels": ["command"], "command": { "argv": ["node", "/path/to/teams-bridge/examples/notify-desktop.mjs"] } } }
+```
+
+`examples/notify-desktop.mjs` shows desktop notifications (macOS Notification Center, Linux
+`notify-send`).
+
+Webhook and command both receive this JSON (POST body or stdin):
+
+```json
+{ "event": "send", "ref": null, "reply_to": null, "silent": false,
+  "text": "💬 Team Chat · group chat\nFrom: Alex\nAsks whether the refund job can be rerun today.\n...",
+  "html": "💬 <b>Team Chat</b> · group chat\n...",
+  "buttons": [{ "text": "Review, edit or approve", "url": "http://127.0.0.1:6095/d/..." }] }
+```
+
+`event` is `send` or `edit`. Answer a `send` with JSON `{"id": "..."}` (response body or the last
+line on stdout) to receive that id as `ref` with later edits of the same message, and as
+`reply_to` for follow-ups (the ⚠️ "a reply may need you" ping). A command must exit 0 within 30
+seconds; a webhook must answer 2xx within 20 seconds.
 
 ### Remote machine, no screen
 
@@ -144,7 +194,7 @@ fetches a new one with its refresh token and the Microsoft session cookies. Whil
 CDP `Fetch` blocks every presence, push channel, registrar and read-marker URL and every write that
 is not sign-in. The first ic3 bearer the app sends is saved to `~/.local/state/teams-bridge/token.json`
 (0600) and the tab is closed, usually within 10 seconds. The daemon runs this 3 hours before
-expiry; if Microsoft wants an interactive login, the owner gets a Telegram alert (`login.hint`) and
+expiry; if Microsoft wants an interactive login, the owner gets an alert (`login.hint`) and
 runs `teams-bridge login`, which does the same in a visible window.
 
 ## Pipeline
@@ -154,7 +204,7 @@ Trouter push ─► engine.ingest ─► SQLite (messages, convs, read markers, 
                      │
                      └► rules: deterministic match ─► optional model classifier (cached) ─► actions
                                                                                   │
-                    notify: wait delayMinutes ─► skip if read elsewhere ─► Telegram summary
+                    notify: wait delayMinutes ─► skip if read elsewhere ─► summary to the channels
                                                  ├► edit when someone else replies (model verdict)
                                                  └► edit to "read" when the read marker passes it
 ```
@@ -162,7 +212,7 @@ Trouter push ─► engine.ingest ─► SQLite (messages, convs, read markers, 
 - Replies: when someone other than the people in a notification answers in the same chat (in a
   channel: the same thread), the notification records it and, about a minute later, a model call
   judges the replies: ✅ looks handled, 👀 still needs you, ⚠️ check the reply (looks wrong, risky,
-  or promises something on the owner's behalf), ❔ not sure. The Telegram message is edited silently
+  or promises something on the owner's behalf), ❔ not sure. The notification is edited silently
   with "↪ X replied" and the verdict; only ⚠️ sends a short threaded ping. Events: `notify_reply`,
   `notify_reply_assessed`.
 
@@ -171,8 +221,8 @@ Trouter push ─► engine.ingest ─► SQLite (messages, convs, read markers, 
 - Model calls: `claude -p` with no tools, settings, MCP or session, structured output, and two
   hourly budgets (live traffic, and rule replays, so a replay never starves live classification). Used for rule classifiers and the one-sentence summary (`notify.summary: "plain"`
   turns summaries off).
-- Telegram: only `sendMessage` and `editMessageText`, so another program can keep polling the same
-  bot undisturbed.
+- Channels: `lib/notify.mjs` (Telegram uses only `sendMessage` and `editMessageText`, so another
+  program can keep polling the same bot undisturbed).
 
 ## Files
 
@@ -184,7 +234,8 @@ Trouter push ─► engine.ingest ─► SQLite (messages, convs, read markers, 
 | `lib/llm.mjs` | classifier and summary calls |
 | `lib/teams.mjs` | token, chat service calls, message normalization |
 | `lib/token-refresh.mjs` | ic3 token renewal through Chromium + CDP |
-| `lib/telegram.mjs` | Telegram send/edit |
+| `lib/notify.mjs`, `lib/telegram.mjs` | notification channels (Telegram, ntfy, webhook, command) |
+| `examples/notify-desktop.mjs` | command channel example: desktop notifications |
 | `lib/drafts.mjs` | drafts, approval page server |
 | `lib/spawn.mjs` | event -> T3 Code thread or `agent spawn` run |
 | `lib/context.mjs` | the context block every model sees (conversation, team, members, thread, mentions) |
@@ -217,10 +268,10 @@ and `when_label` lets one classifier call branch into different actions (researc
 
 ## Drafts and approval
 
-Agents never post. `draft create` (CLI or MCP) stores a draft and sends the owner a Telegram
-message with a URL button to `<drafts.baseUrl>/d/<token>`, served by the daemon (on 127.0.0.1 unless
+Agents never post. `draft create` (CLI or MCP) stores a draft and sends the owner a
+notification with a link (a URL button on Telegram) to `<drafts.baseUrl>/d/<token>`, served by the daemon (on 127.0.0.1 unless
 `drafts.host` says otherwise; to approve from a phone, bind it to a private network such as a VPN
-and set `baseUrl`, never to the public internet). Drafts need Telegram. The page shows the latest messages of the chat, an editable text and
+and set `baseUrl`, never to the public internet). Drafts need a notification channel. The page shows the latest messages of the chat, an editable text and
 Approve/Reject. The token is 144 random bits; the form also carries a per-draft nonce; approval
 claims the draft atomically (no double send); exactly the approved text is posted; drafts expire
 after 24 hours; at most 10 are sent per day. URL buttons are used instead of callback buttons so
@@ -245,7 +296,7 @@ accents. The directory itself is not searched. A 1:1 conversation id is determin
 `19:<oid>_<oid>@unq.gbl.spaces` with the two object ids sorted. A draft with `to` resolves the
 person, then asks Teams whether that chat exists and whether any of the owner's messages are in it
 (`GET` conversation, then up to 100 messages). No chat (`first_contact`) or none of the owner's
-messages (`never_written`) marks the draft, adds a warning to Telegram and the page, requires a
+messages (`never_written`) marks the draft, adds a warning to the notification and the page, requires a
 confirmation tick, and counts against `drafts.maxFirstContactsPerDay` (3). On approval a
 missing chat is created with `POST /v1/threads` (two members, `uniquerosterthread`) if posting to
 the deterministic id is refused. That creation path has not been exercised yet, because no
@@ -264,7 +315,8 @@ drafts create/list/cancel, presence. Register it with `claude mcp add --scope us
 
 ## Tests
 
-`test/offline.sh` runs scenario tests (notification, reply verdict, read edit, unfiltered fallback)
+`test/offline.sh` runs scenario tests (notification, reply verdict, read edit, unfiltered fallback,
+command channel, no channel)
 in a throwaway `TEAMS_BRIDGE_HOME` with a fake token and the default rules, with Telegram in dry-run
 mode (`TEAMS_BRIDGE_TG_DRY=1` prints instead of sending). It makes a few real model calls through
 the Claude Code CLI and never touches Teams or Telegram.

@@ -1,6 +1,11 @@
 {
   "owner": { "about": "backend developer on the payments team" },
-  "notify": { "delayMinutes": 3, "summary": "llm" },
+  "notify": {
+    "delayMinutes": 3,
+    "summary": "llm",
+    "channels": ["ntfy"],
+    "ntfy": { "topic": "a-long-random-name-only-you-know" }
+  },
   "llm": { "maxCallsPerHour": 200 },
   "browser": { "path": null, "profile": null, "cdpPort": null },
   "drafts": { "host": "127.0.0.1", "port": 6095 },

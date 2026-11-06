@@ -1,14 +1,15 @@
 ---
 name: teams-bridge
-description: Read the owner's Microsoft Teams messages and react to them - list conversations, read chats, follow the event stream with a cursor, and add or test notification rules (exact filters or model-judged ones) that send Telegram summaries. Use when a task involves the owner's Teams chats, Teams notifications, "what did X say in Teams", or setting up alerts for Teams messages. Read-only toward Teams.
+description: Read the owner's Microsoft Teams messages and react to them - list conversations, read chats, follow the event stream with a cursor, and add or test notification rules (exact filters or model-judged ones) that send notification summaries (Telegram, ntfy, webhook or a command). Use when a task involves the owner's Teams chats, Teams notifications, "what did X say in Teams", or setting up alerts for Teams messages. Read-only toward Teams.
 ---
 
 # teams-bridge
 
 A local daemon (`teams-bridge daemon`, usually a systemd or launchd user service) receives the
 owner's Teams messages over the same push channel the Teams web app uses, stores them in SQLite and
-runs rules on them. Matching messages become Telegram summaries ("who wants what, waiting for
-you"); without Telegram they are `notify_sent` events with the text. They
+runs rules on them. Matching messages become notification summaries ("who wants what, waiting
+for you") on the owner's channels (`notify.channels`: Telegram, ntfy, webhook, command); without a
+channel they are `notify_sent` events with the text. They
 are skipped if the owner reads the message elsewhere within the delay, and edited to "read" when the
 owner reads them later. When someone else replies, the message gains "↪ X replied" and a model
 verdict (handled / still needs you / check the reply); only "check the reply" pings.
@@ -18,7 +19,7 @@ read it first. It holds this owner's places, rules, preferences and machine setu
 
 ## Hard rules
 - **Never send Teams messages yourself.** The only way a message reaches anyone is a **draft** the
-  owner approves (and may edit) on the page linked from Telegram. Propose drafts only when the
+  owner approves (and may edit) on the page linked from a notification. Propose drafts only when the
   owner asked for one. The only direct write is
   `teams-bridge notes-send` to the owner's own Notes, for pipeline tests.
 - Do not open Teams in a browser to read messages: that marks chats read and can show the owner
@@ -83,7 +84,7 @@ Other harnesses use the alternatives below.
   sent into the same thread instead of starting a new one, and every other new message in that chat
   (channel: that thread), the owner's included, is forwarded to the thread in 90-second batches so it
   can notice an answer already given. `announce` (default true) sends a silent
-  Telegram message with the thread link. `via: "agent"` runs `agent spawn NAME -r RUNNER -C DIR -T
+  notification with the thread link. `via: "agent"` runs `agent spawn NAME -r RUNNER -C DIR -T
   MAX PROMPT` (`runner` claude|omp, `max_minutes`), for setups that have such a launcher. Set
   `spawn.defaultVia` in config to leave `via` out of rules.
 - The prompt gets the triggering message, the last 15 messages of the chat, and fixed rules: the
@@ -131,14 +132,14 @@ case-insensitive substrings, `text` fields are case-insensitive regexes):
 }
 ```
 If the model call fails (budget, timeout after one retry), `classify.on_error: "notify"` (default)
-still runs the rule's plain `notify` actions, marked "Sent unfiltered" in Telegram; spawn/exec and
+still runs the rule's plain `notify` actions, marked "Sent unfiltered"; spawn/exec and
 `when_label` actions never run without a verdict. `"skip"` drops the message instead.
 - `match` fields are ANDed; `any` is a list of field sets of which at least one must also match
   (OR), e.g. "from Alex AND (in the team chat OR a DM)".
 - **Places** are named groups of chats in `~/.config/teams-bridge/config.json`, referenced as
   `"@name"` in `conv` / `not_conv`: `teams-bridge places`, `places set NAME CONV... [--force]`,
   `places rm NAME` (MCP `teams_places` to read). Prefer a place over repeating chat ids.
-- **Context**: classifiers, Telegram summaries and spawned sessions all get the same context block
+- **Context**: classifiers, notification summaries and spawned sessions all get the same context block
   (`lib/context.mjs`): conversation title and kind, team and description for channels, members
   (names of people seen posting), the thread (first post plus earlier replies) for a channel
   reply or the earlier messages otherwise (`classify.context_messages`, default 6; `spawn`
@@ -147,7 +148,7 @@ still runs the rule's plain `notify` actions, marked "Sent unfiltered" in Telegr
 - The deterministic `match` always runs first; `classify` (a small isolated model call, verdict
   cached per rule version and message) only runs on messages that passed it. Keep `match` as
   narrow as possible to save tokens.
-- `notify` sends a Telegram summary after the delay (default 3 minutes) unless the owner read it
+- `notify` sends a summary to the owner's channels after the delay (default 3 minutes) unless the owner read it
   elsewhere. Several messages in one chat are batched into one notification.
 - `queue` only records a `rule_match` event, for subscriptions and `tail --rule`.
 - `spawn` / `exec`: see Subscribing and reacting.
@@ -170,14 +171,15 @@ teams-bridge draft create --conv CONV --text "exact text" --reason "why, one lin
 teams-bridge draft create --to "Alex Example" --text "..." --reason "..." --agent NAME   # 1:1 to a person
 teams-bridge draft list [--state pending] | draft show ID | draft cancel ID
 ```
-The owner gets the draft in Telegram with a "Review, edit or approve" button. It opens
+The owner gets the draft as a notification with a "Review, edit or approve" link (drafts need a
+notification channel). It opens
 `drafts.baseUrl` + `/d/<token>` (served by the daemon; local only unless the owner exposed it), which shows the recent chat, an
 editable text and Approve/Reject. Exactly the approved text is posted; drafts expire after 24 h;
 at most 10 sends a day. Watch `draft_sent` / `draft_rejected` / `draft_expired` events.
 
 **First messages need extra care.** For a 1:1 draft the bridge checks Teams itself: if the owner has
 no chat with that person (`first_contact`) or has never written in it (`never_written`), the draft
-is marked "⚠️ FIRST MESSAGE" in Telegram and on the page, approval requires an extra tick
+is marked "⚠️ FIRST MESSAGE" in the notification and on the page, approval requires an extra tick
 confirming the recipient, and at most 3 such messages can be sent a day. Tell the owner plainly
 when your draft is a first message. A missing chat is created when the owner approves. People are
 found only among those seen in the owner's chats (`teams-bridge people`), not the whole directory.
@@ -195,7 +197,7 @@ purpose; do not reset it on your own.
 
 ## Control and troubleshooting
 ```bash
-teams-bridge pause | resume                 # Telegram off/on; recording continues
+teams-bridge pause | resume                 # notifications off/on; recording continues
 teams-bridge notifications                  # recent notifications and their states
 teams-bridge notify-preview CONV [--send]   # render a notification (send = silent test)
 teams-bridge token status | token refresh   # refresh never opens a chat or shows the owner online
@@ -208,6 +210,6 @@ journalctl --user -u teams-bridge -n 50     # Linux daemon log, one line per eve
   both in one folder.
 - The ic3 token lasts about 24 hours. The daemon renews it 3 hours before expiry with a short
   headless browser run on the login profile (blocking presence, push and read-marker calls). If the
-  Microsoft sign-in itself expires, it sends the owner one Telegram alert every 6 hours
+  Microsoft sign-in itself expires, it sends the owner one alert every 6 hours
   (`login.hint` in config); the owner runs `teams-bridge login`. Do not run it for them.
 - How it works: the project README.

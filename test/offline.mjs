@@ -10,7 +10,8 @@ const exp = Math.floor(Date.now() / 1000) + 86400;
 writeFileSync(P.token, JSON.stringify({ ic3: `${b64({ alg: 'none' })}.${b64({ aud: 'https://ic3.teams.office.com', exp, oid: '11111111-2222-3333-4444-555555555555', name: 'Test Owner' })}.x`, exp, oid: '11111111-2222-3333-4444-555555555555', chatsvc: 'http://127.0.0.1:9/api/chatsvc/test' }));
 const { ingestMessage, processNotifications } = await import(`${L}/engine.mjs`);
 const { myMri } = await import(`${L}/teams.mjs`);
-const tg = await import(`${L}/telegram.mjs`);
+const tg = await import(`${L}/notify.mjs`);
+const { writeFileSync: wf, readFileSync: rf, existsSync } = await import('node:fs');
 const d = db(), me = myMri();
 let n = 0;
 const conv = id => `19:OFFLINETEST${id}000000000000000000000@thread.v2`;
@@ -60,6 +61,29 @@ await step('model unavailable -> unfiltered notification with a quote', async ()
   const html = tg.dryLog.at(-1).html;
   assert.match(html, /Sent unfiltered/); assert.match(html, /<blockquote>.*refund retry job/);
   budget(false);
+});
+await step('command channel: send, then edit with the id it returned', async () => {
+  // A tiny receiver: appends each payload to a file and answers with an id.
+  const log = `${P.state}/cmd.jsonl`, script = `${P.state}/recv.mjs`;
+  wf(script, `import { appendFileSync, readFileSync } from 'node:fs'; const j = JSON.parse(readFileSync(0, 'utf8')); appendFileSync(${JSON.stringify(log)}, JSON.stringify(j) + '\\n'); console.log(JSON.stringify({ id: 'msg-' + Date.now() }));`);
+  wf(P.configFile, JSON.stringify({ owner: { name: 'Test Owner' }, notify: { channels: ['command'], command: { argv: [process.execPath, script] } } }));
+  const r = await tg.send('💬 <b>Title</b>\n<blockquote>hello</blockquote>', { buttons: [[{ text: 'Open', url: 'http://127.0.0.1:1/x' }]] });
+  await tg.edit(r.chat, r.messageId, '💬 <b>Title</b> read');
+  const lines = rf(log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(lines[0].event, 'send'); assert.match(lines[0].text, /Title\n“hello”/); assert.match(lines[0].text, /Open: http/);
+  assert.equal(lines[1].event, 'edit'); assert.match(lines[1].ref, /^msg-/); assert.equal(lines[1].text, '💬 Title read');
+});
+await step('no channel: notifications are recorded as events, drafts are refused', async () => {
+  wf(P.configFile, JSON.stringify({ owner: { name: 'Test Owner' }, notify: { channels: [] } }));
+  assert.deepEqual(await tg.send('x'), { chat: null, messageId: null });
+  const { createDraft } = await import(`${L}/drafts.mjs`);
+  await assert.rejects(createDraft({ conv: conv(1), text: 'hi' }), /notification channel/);
+});
+await step('older rows (a bare Telegram chat id) still edit through telegram', async () => {
+  wf(P.configFile, JSON.stringify({ owner: { name: 'Test Owner' } }));
+  const before = tg.dryLog.length;
+  await tg.edit('12345', 777, 'legacy edit');
+  assert.equal(tg.dryLog.length, before + 1); assert.equal(tg.dryLog.at(-1).messageId, 777);
 });
 console.log(`${n} scenarios passed`);
 process.exit(0);
