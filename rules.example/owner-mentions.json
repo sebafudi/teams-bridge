@@ -1,0 +1,7 @@
+{
+  "id": "owner-mentions",
+  "owner": "owner",
+  "description": "Any message that @mentions the owner, in any chat or channel",
+  "match": { "mentions_me": true },
+  "actions": [{ "type": "notify" }]
+}

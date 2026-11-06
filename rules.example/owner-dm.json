@@ -1,0 +1,7 @@
+{
+  "id": "owner-dm",
+  "owner": "owner",
+  "description": "Every direct message from someone else",
+  "match": { "kind": "dm" },
+  "actions": [{ "type": "notify" }]
+}

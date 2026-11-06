@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# teams-bridge CLI: runs lib/cli.mjs next to this script (also through symlinks) with Node 24+.
+set -euo pipefail
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  dir=$(cd "$(dirname "$self")" && pwd); self=$(readlink "$self")
+  case $self in /*) ;; *) self="$dir/$self" ;; esac
+done
+root=$(cd "$(dirname "$self")/.." && pwd)
+# install.sh records the Node command and PATH it found (services start with a bare PATH).
+# TEAMS_BRIDGE_NODE overrides the Node command, e.g. "mise exec node@24 -- node".
+if [ -f "$root/env" ]; then . "$root/env"; fi
+exec ${TEAMS_BRIDGE_NODE:-node} --no-warnings "$root/lib/cli.mjs" "$@"

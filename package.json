@@ -1,0 +1,12 @@
+{
+  "name": "teams-bridge",
+  "version": "0.1.0",
+  "description": "Microsoft Teams messages for you and your agents: push listener, rules, Telegram notifications, MCP, approved drafts",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "bin": { "teams-bridge": "bin/teams-bridge" },
+  "engines": { "node": ">=24" },
+  "scripts": { "test": "test/offline.sh" },
+  "repository": { "type": "git", "url": "git+https://github.com/sebafudi/teams-bridge.git" }
+}

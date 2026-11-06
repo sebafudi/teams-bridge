@@ -1,0 +1,20 @@
+{
+  "id": "bug-reports",
+  "owner": "owner",
+  "description": "Example: a teammate reports a possible bug in the team chat or a DM; run a script that starts an agent",
+  "enabled": true,
+  "match": {
+    "sender": ["Alex Example"],
+    "any": [{ "conv": "@my-team" }, { "kind": "dm" }]
+  },
+  "classify": {
+    "question": "Is this message a report of a possible bug or a question about how the system behaves?",
+    "labels": ["possible_bug", "question", "other"],
+    "fire_on": ["possible_bug", "question"],
+    "min_confidence": 0.6
+  },
+  "actions": [
+    { "type": "notify", "delay_minutes": 3 },
+    { "type": "exec", "when_label": "possible_bug", "command": ["/path/to/start-agent", "--task", "triage"], "timeout_sec": 60, "max_per_hour": 4 }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "owner-group-attention",
+  "owner": "owner",
+  "description": "Group chat messages a model judges to need the owner (no @mention needed)",
+  "match": { "kind": ["group", "meeting"], "mentions_me": false },
+  "classify": {
+    "question": "Does this message need the owner's attention or a reply from them? Yes if it asks them something, assigns them work, reports something urgent or broken that they own, or is clearly addressed to them. Routine chatter, reactions, or things for other people are not.",
+    "labels": ["needs_sebastian", "fyi", "noise"],
+    "fire_on": ["needs_sebastian"],
+    "min_confidence": 0.7,
+    "context_messages": 6
+  },
+  "actions": [{ "type": "notify" }]
+}

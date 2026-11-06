@@ -1,0 +1,8 @@
+{
+  "owner": { "about": "backend developer on the payments team" },
+  "notify": { "delayMinutes": 3, "summary": "llm" },
+  "llm": { "maxCallsPerHour": 200 },
+  "browser": { "path": null, "profile": null, "cdpPort": null },
+  "drafts": { "host": "127.0.0.1", "port": 6095 },
+  "places": { "my-team": ["Team Chat"] }
+}
