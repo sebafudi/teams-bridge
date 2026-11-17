@@ -87,7 +87,8 @@ Other harnesses use the alternatives below.
   project's default). Later matches in the same chat within `follow_up_minutes` (default 60) are
   sent into the same thread instead of starting a new one, and every other new message in that chat
   (channel: that thread), the owner's included, is forwarded to the thread in 90-second batches so it
-  can notice an answer already given. `announce` (default true) sends a silent
+  can notice an answer already given. Those prompts keep the thread on its original issue: other
+  topics get one line pointing to a separate thread. `announce` (default true) sends a silent
   notification with the thread link. `via: "agent"` runs `agent spawn NAME -r RUNNER -C DIR -T
   MAX PROMPT` (`runner` claude|omp, `max_minutes`), for setups that have such a launcher. Set
   `spawn.defaultVia` in config to leave `via` out of rules.

@@ -295,7 +295,7 @@ take it directly, and `"output": "notify"` sends what it prints back to you as a
 a T3 Code thread (`t3 thread start` with the newest `~/.t3/runtime/versions/*/t3`, follow-ups in
 the same chat go to the same thread via `t3 thread send`, and any other new messages there, the
 owner's included, are forwarded in 90-second batches so the session can see that someone already
-answered and adjust; event `session_forward`) or an `agent spawn` command on PATH. All are capped per hour,
+answered and adjust, while staying on the issue it was started for; event `session_forward`) or an `agent spawn` command on PATH. All are capped per hour,
 and `when_label` lets one classifier call branch into different actions (research vs bug fix).
 
 ## Drafts and approval
