@@ -10,3 +10,4 @@ cp "$here"/rules.example/*.json "$tmp/rules.d/"
 echo '{ "owner": { "name": "Test Owner", "about": "backend developer" } }' > "$tmp/config.json"
 export TEAMS_BRIDGE_HOME="$tmp" TEAMS_BRIDGE_TG_DRY=1
 ${TEAMS_BRIDGE_NODE:-node} --no-warnings "$here/test/offline.mjs" "$here/lib" 2>"$tmp/tg.log" || { cat "$tmp/tg.log"; exit 1; }
+TEAMS_BRIDGE_TEST_LLM=1 bash "$here/test/spawn.sh"

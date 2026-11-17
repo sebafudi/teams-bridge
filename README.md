@@ -90,6 +90,10 @@ one folder (config at the top, state in `state/`).
 | `login.hint` | `Run: teams-bridge login` | text of the "sign-in needed" alert, e.g. a link to a remote desktop |
 | `drafts.host`, `drafts.port`, `drafts.baseUrl` | `127.0.0.1`, 6095, derived | approval pages |
 | `spawn.defaultVia` | none | `t3` or `agent`, for rules that leave out `spawn.via` |
+| `spawn.delayMinutes` | 5 | wait before starting a spawned session; see [delayed spawns](#delayed-spawns) |
+| `spawn.quietMinutes` | 2 | after a message or someone typing in that chat, wait until it has been quiet this long |
+| `spawn.maxWaitMinutes` | 30 | never wait longer than this after the first match |
+| `spawn.recheck` | `llm` | others replied while waiting: `llm` asks the model whether that settles it, `plain` skips |
 | `places` | `{}` | named groups of chats for rules (`"@team"`) |
 
 ## Notification channels
@@ -268,7 +272,7 @@ Trouter push ─► engine.ingest ─► SQLite (messages, convs, read markers, 
 | `bin/teams-bridge` | CLI wrapper (finds Node 24) |
 | `install.sh` | copies to `~/.local/lib/teams-bridge`, links the CLI, installs the systemd/launchd service and default rules |
 | `skills/teams-bridge/SKILL.md` | agent skill: how agents read, subscribe and propose drafts |
-| `test/offline.sh` | scenario tests |
+| `test/offline.sh`, `test/spawn.sh` | scenario tests |
 
 ## Subscriptions and reactions
 
@@ -297,6 +301,35 @@ the same chat go to the same thread via `t3 thread send`, and any other new mess
 owner's included, are forwarded in 90-second batches so the session can see that someone already
 answered and adjust, while staying on the issue it was started for; event `session_forward`) or an `agent spawn` command on PATH. All are capped per hour,
 and `when_label` lets one classifier call branch into different actions (research vs bug fix).
+
+A chat often carries several topics at once. Forwarded batches go through a small model check
+first, and only messages about the thread's own issue are sent (`session_forward` counts the
+`dropped` ones). Without the model, only the asker's and your own messages go through. A new
+match while a thread is live goes into that thread only if it is about the same issue. A different
+question gets its own (delayed) thread, and the first thread keeps receiving messages about its
+issue.
+
+### Delayed spawns
+
+A conversation often settles a question by itself, so a `spawn` does not start right away:
+
+1. A match schedules it `delay_minutes` ahead (`spawn.delayMinutes`, default 5; event
+   `spawn_scheduled`). `0` starts at once, as before.
+2. While it waits, a new message or someone typing in that chat (Teams typing notices) pushes it
+   out until the chat has been quiet for `quiet_minutes` (default 2). It never waits longer than
+   `max_wait_minutes` (default 30) after the first match.
+3. More matches of the same rule in the same chat (in a channel: the same thread) collapse into
+   one spawn for the latest message. The earlier ones reach the session as context (event
+   `spawn_collapsed`).
+4. When it is due it is checked again and skipped (event `spawn_skipped` with a `reason`) if you
+   replied, if you read the chat past the message (`skip_if_read: false` turns this off), or if
+   others replied. With `recheck: "llm"` (default) a reply by someone else only skips it when the
+   model says it settles the question. The asker adding more does not count as a reply.
+5. Otherwise it starts (`spawn_fired`, then `action_spawned`), subject to `max_per_hour`. A match
+   while the rule's T3 thread for that chat is still live goes to that thread at once as a
+   follow-up, if it is about the same issue.
+
+Pending spawns are stored in the database, so a daemon restart keeps them.
 
 ## Drafts and approval
 
@@ -348,7 +381,9 @@ drafts create/list/cancel, presence. Register it with `claude mcp add --scope us
 ## Tests
 
 `test/offline.sh` runs scenario tests (notification, reply verdict, read edit, unfiltered fallback,
-command channel, no channel)
+command channel, no channel, and the delayed spawn scenarios of `test/spawn.sh`)
 in a throwaway `TEAMS_BRIDGE_HOME` with a fake token and the default rules, with Telegram in dry-run
 mode (`TEAMS_BRIDGE_TG_DRY=1` prints instead of sending). It makes a few real model calls through
-the Claude Code CLI and never touches Teams or Telegram.
+the Claude Code CLI and never touches Teams or Telegram. `test/spawn.sh` alone runs the spawn
+scenarios (scheduling, typing, the wait cap, collapsing, skips, rate limits, a restart, topic
+filtering) with a fake `t3` and no model calls. `TEAMS_BRIDGE_TEST_LLM=1` adds the model checks.
