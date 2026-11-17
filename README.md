@@ -93,6 +93,7 @@ one folder (config at the top, state in `state/`).
 | `spawn.delayMinutes` | 5 | wait before starting a spawned session; see [delayed spawns](#delayed-spawns) |
 | `spawn.quietMinutes` | 2 | after a message or someone typing in that chat, wait until it has been quiet this long |
 | `spawn.maxWaitMinutes` | 30 | never wait longer than this after the first match |
+| `spawn.activeWindowMinutes`, `spawn.activeDelayMinutes` | 10, 15 | someone else wrote in that chat in the last 10 minutes (or writes or types while it waits): people are online, so wait 15 |
 | `spawn.recheck` | `llm` | others replied while waiting: `llm` asks the model whether that settles it, `plain` skips |
 | `places` | `{}` | named groups of chats for rules (`"@team"`) |
 
@@ -314,22 +315,39 @@ issue.
 A conversation often settles a question by itself, so a `spawn` does not start right away:
 
 1. A match schedules it `delay_minutes` ahead (`spawn.delayMinutes`, default 5; event
-   `spawn_scheduled`). `0` starts at once, as before.
+   `spawn_scheduled`). `0` starts at once, as before. If someone other than the asker wrote in that
+   chat in the last `active_window_minutes` (default 10), people are online and may answer it
+   themselves: it waits `active_delay_minutes` (default 15) instead (`others_online` in the event).
 2. While it waits, a new message or someone typing in that chat (Teams typing notices) pushes it
-   out until the chat has been quiet for `quiet_minutes` (default 2). It never waits longer than
-   `max_wait_minutes` (default 30) after the first match.
+   out until the chat has been quiet for `quiet_minutes` (default 2). Someone other than the asker
+   writing or typing also stretches it to at least `active_delay_minutes` after the match. It never
+   waits longer than `max_wait_minutes` (default 30) after the first match.
 3. More matches of the same rule in the same chat (in a channel: the same thread) collapse into
    one spawn for the latest message. The earlier ones reach the session as context (event
    `spawn_collapsed`).
 4. When it is due it is checked again and skipped (event `spawn_skipped` with a `reason`) if you
-   replied, if you read the chat past the message (`skip_if_read: false` turns this off), or if
-   others replied. With `recheck: "llm"` (default) a reply by someone else only skips it when the
-   model says it settles the question. The asker adding more does not count as a reply.
+   replied or if others replied. With `recheck: "llm"` (default) the model checks that your
+   message is about this question (in a busy chat you may have answered something else; a direct
+   Teams reply always counts) and that a reply by someone else settles it. The asker adding more
+   does not count as a reply. Having read the chat in Teams does not skip it: when a lot happens
+   you can scroll past a question (`skip_if_read: true` opts in to skipping on read).
 5. Otherwise it starts (`spawn_fired`, then `action_spawned`), subject to `max_per_hour`. A match
    while the rule's T3 thread for that chat is still live goes to that thread at once as a
    follow-up, if it is about the same issue.
 
 Pending spawns are stored in the database, so a daemon restart keeps them.
+
+### Unanswered questions
+
+`teams-bridge unanswered [--days 7] [--all] [--json]` (MCP `teams_unanswered`) lists the messages
+that matched your notify or spawn rules and that you never answered, grouped per conversation (in a
+channel, per thread), oldest first. Read in Teams does not count as handled. A question is answered
+when you replied to it (a direct reply, or a later message the model says is about it) or when
+someone else's reply settled it (`settled_by_others`, from the notification's reply verdict or a
+skipped spawn). `maybe_answered` means you wrote in the chat but the topic check was not
+available. Each entry has a stable `key`, the open messages, who else replied, and links to research
+threads started for it. A daily review (for example a morning agent that fills a task board) can
+turn each entry into a task. It is read-only: nothing is sent or marked read.
 
 ## Drafts and approval
 
@@ -386,4 +404,4 @@ in a throwaway `TEAMS_BRIDGE_HOME` with a fake token and the default rules, with
 mode (`TEAMS_BRIDGE_TG_DRY=1` prints instead of sending). It makes a few real model calls through
 the Claude Code CLI and never touches Teams or Telegram. `test/spawn.sh` alone runs the spawn
 scenarios (scheduling, typing, the wait cap, collapsing, skips, rate limits, a restart, topic
-filtering) with a fake `t3` and no model calls. `TEAMS_BRIDGE_TEST_LLM=1` adds the model checks.
+filtering, the unanswered report) with a fake `t3` and no model calls. `TEAMS_BRIDGE_TEST_LLM=1` adds the model checks.

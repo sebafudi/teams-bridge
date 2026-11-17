@@ -9,6 +9,6 @@
   "llm": { "maxCallsPerHour": 200 },
   "browser": { "path": null, "profile": null, "cdpPort": null },
   "drafts": { "host": "127.0.0.1", "port": 6095 },
-  "spawn": { "defaultVia": "t3", "delayMinutes": 5, "quietMinutes": 2, "maxWaitMinutes": 30, "recheck": "llm" },
+  "spawn": { "defaultVia": "t3", "delayMinutes": 5, "quietMinutes": 2, "maxWaitMinutes": 30, "activeWindowMinutes": 10, "activeDelayMinutes": 15, "recheck": "llm" },
   "places": { "my-team": ["Team Chat"] }
 }

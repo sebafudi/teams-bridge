@@ -34,6 +34,7 @@ teams-bridge status                       # daemon, token, counts, rules, last_s
 teams-bridge convs [--json]               # conversations, unread counts, ids
 teams-bridge read "Team Chat" --last 30 [--json]   # id or title substring; * marks unread
 teams-bridge unread [--json]
+teams-bridge unanswered [--days 7] [--all] [--json]   # questions the owner never answered; read in Teams does not count
 teams-bridge tail --since SEQ --json      # event stream; remember the last seq you processed
 teams-bridge tail --follow --kind message,rule_match
 ```
@@ -73,7 +74,8 @@ Other harnesses use the alternatives below.
   { "type": "spawn", "via": "t3", "project": "~/code/my-service", "when_label": "possible_bug",
     "worktree": "develop", "branch": "fix/{rule}-{ts}", "provider": "claudeAgent", "model": "claude-opus-5-5",
     "title": "Bug report: {conv_title}", "follow_up_minutes": 120, "max_per_hour": 2, "announce": true,
-    "delay_minutes": 5, "quiet_minutes": 2, "max_wait_minutes": 30, "recheck": "llm", "skip_if_read": true,
+    "delay_minutes": 5, "quiet_minutes": 2, "max_wait_minutes": 30, "active_window_minutes": 10,
+    "active_delay_minutes": 15, "recheck": "llm",
     "prompt": "Investigate and, if it is a real bug, fix it on a local branch ..." },
   { "type": "spawn", "via": "agent", "runner": "claude", "project": "~/code/x", "model": "sonnet", "max_minutes": 20,
     "prompt": "..." },
@@ -98,9 +100,13 @@ Other harnesses use the alternatives below.
   at once). A new message or someone typing in that chat pushes the start out until the chat has
   been quiet for `quiet_minutes` (default 2), never past `max_wait_minutes` (default 30) after the
   first match. More matches of the rule in the same chat (channel: thread) collapse into one spawn
-  for the latest message. When due it is skipped (`spawn_skipped` with a reason) if the owner
-  replied, the owner read past it (`skip_if_read`, default true), or others replied and settled it
-  (`recheck: "llm"` asks the model; `"plain"` skips on any reply). Pending spawns survive a restart.
+  for the latest message. Someone other than the asker writing in the chat within
+  `active_window_minutes` (10) before, or writing or typing while it waits, means people are online:
+  it waits at least `active_delay_minutes` (15). When due it is skipped (`spawn_skipped` with a
+  reason) if the owner replied about it or others replied and settled it (`recheck: "llm"` checks
+  both with the model; `"plain"` skips on any reply). Read in Teams is not a reason to skip (opt in
+  with `skip_if_read: true`): the owner can scroll past a question in a busy chat. Pending spawns
+  survive a restart.
 - Several topics in one chat: forwarded batches keep only messages about the thread's own issue (a
   model check; without it, the asker's and the owner's messages). A new match while the thread is
   live goes into that thread only if it is about the same issue. Otherwise it gets its own delayed
@@ -176,7 +182,7 @@ still runs the rule's plain `notify` actions, marked "Sent unfiltered"; spawn/ex
 ## MCP
 Register it as `teams-bridge` with the command `teams-bridge mcp` (stdio), e.g.
 `claude mcp add --scope user teams-bridge -- teams-bridge mcp`.
-Tools: `teams_status`, `teams_conversations`, `teams_read`, `teams_unread`, `teams_events`
+Tools: `teams_status`, `teams_conversations`, `teams_read`, `teams_unread`, `teams_unanswered`, `teams_events`
 (cursor: pass `next_since` back as `since`), `teams_rules`, `teams_rule_test`, `teams_rule_save`,
 `teams_rule_enable`, `teams_people`, `teams_subscribe`, `teams_wait`, `teams_subscriptions`, `teams_unsubscribe`,
 `teams_draft_create`, `teams_drafts`, `teams_draft_cancel`, `teams_presence`, `teams_presence_set`.

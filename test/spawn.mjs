@@ -38,9 +38,9 @@ function setup(c, title) {
 }
 const people = { asker: ['00000000-0000-0000-0000-000000000001', 'Test Asker'], bob: ['00000000-0000-0000-0000-000000000002', 'Test Bob'], carol: ['00000000-0000-0000-0000-000000000003', 'Test Carol'], owner: [oid, 'Test Owner'] };
 let clock = Date.now() - 3600e3;
-async function say(c, who, text) {
+async function say(c, who, text, extra = {}) {
   const id = clock += 1000, [o, name] = people[who];
-  await ingestMessage({ id: String(id), conversationLink: `https://x/v1/users/ME/conversations/${c}`, from: `https://x/contacts/8:orgid:${o}`, imdisplayname: name, messagetype: 'RichText/Html', content: `<p>${text}</p>`, originalarrivaltime: new Date(id).toISOString(), version: String(id), threadtype: 'chat', properties: {} }, { source: 'test' });
+  await ingestMessage({ id: String(id), conversationLink: `https://x/v1/users/ME/conversations/${c}`, from: `https://x/contacts/8:orgid:${o}`, imdisplayname: name, messagetype: 'RichText/Html', content: `<p>${text}</p>`, originalarrivaltime: new Date(id).toISOString(), version: String(id), threadtype: 'chat', properties: {}, ...extra }, { source: 'test' });
   await new Promise(r => setTimeout(r, 150)); // rule evaluation runs in the background
   return String(id);
 }
@@ -67,9 +67,24 @@ await step('a match schedules the spawn instead of starting it', async () => {
 await step('someone typing pushes the deadline to a quiet window', async () => {
   const c = conv(1);
   d.prepare('UPDATE spawns SET due_at = ? WHERE conv = ?').run(Date.now() + 10e3, c);
-  await typing(c);
+  await typing(c, 'asker');
   const s = pending(c);
   near(s.due_at, Date.now() + 2 * 60e3, 'due 2 quiet minutes after typing'); assert.equal(s.postponed, 1);
+});
+await step('someone else typing means people are online: at least the active delay', async () => {
+  const c = conv(1);
+  await typing(c, 'bob');
+  const s = pending(c);
+  near(s.due_at, s.created_at + 15 * 60e3, 'due 15 minutes after the match'); assert.equal(s.postponed, 2);
+});
+await step('someone else wrote shortly before the match: the longer delay from the start', async () => {
+  const c = conv(12); setup(c, 'Spawn online');
+  await say(c, 'bob', 'Morning all, deploy went fine.');
+  await say(c, 'asker', 'Does the payout export include fees?');
+  const s = pending(c);
+  near(s.due_at, Date.now() + 15 * 60e3, 'due after the 15 minute active delay');
+  assert.equal(events('spawn_scheduled', c)[0].data.others_online, true);
+  d.prepare("UPDATE spawns SET state = 'skipped' WHERE id = ?").run(s.id);
 });
 await step('a second match collapses into one spawn for the latest message', async () => {
   const c = conv(1);
@@ -142,24 +157,30 @@ await step('recheck "plain": any reply by someone else skips', async () => {
   assert.equal(events('spawn_skipped', c)[0].data.reason, 'Test Bob replied');
   writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule()));
 });
-await step('the owner replied: skipped', async () => {
+await step('the owner wrote after it: skipped (plain: any message; model down: skipped too)', async () => {
   const c = conv(5); setup(c, 'Spawn E');
+  writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule({ recheck: 'plain' })));
   await say(c, 'asker', 'Can refunds be partial?');
   await say(c, 'owner', 'Yes, from the invoice page.');
   await processSpawns({ now: pending(c).due_at + 1 });
   assert.equal(events('spawn_skipped', c)[0].data.reason, 'owner replied');
+  writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule()));
+  await say(c, 'asker', 'And can they go to a different card?');
+  await say(c, 'owner', 'Checking.');
+  await processSpawns({ now: pending(c).due_at + 1 });
+  assert.match(events('spawn_skipped', c)[1].data.reason, /^owner wrote in the chat/);
 });
-await step('the owner read it: skipped; skip_if_read false: started', async () => {
+await step('read in Teams is not handled: started anyway; skip_if_read true: skipped', async () => {
   const c = conv(6); setup(c, 'Spawn F');
   const id = await say(c, 'asker', 'Where do payment links expire?');
   d.prepare('UPDATE convs SET my_horizon = ? WHERE id = ?').run(Number(id), c);
   await processSpawns({ now: pending(c).due_at + 1 });
-  assert.equal(events('spawn_skipped', c)[0].data.reason, 'owner read it');
-  writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule({ skip_if_read: false })));
-  await say(c, 'asker', 'And can we extend them?');
-  d.prepare('UPDATE convs SET my_horizon = ? WHERE id = ?').run(clock, c);
-  await processSpawns({ now: pending(c).due_at + 1 });
   await settled(() => events('action_spawned', c).length, 'the thread to start');
+  writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule({ skip_if_read: true, follow_up_minutes: 0 })));
+  const id2 = await say(c, 'asker', 'And can we extend them?');
+  d.prepare('UPDATE convs SET my_horizon = ? WHERE id = ?').run(Number(id2), c);
+  await processSpawns({ now: pending(c).due_at + 1 });
+  assert.equal(events('spawn_skipped', c)[0].data.reason, 'owner read it');
   writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule()));
 });
 await step('the asker adding more is not an answer', async () => {
@@ -207,11 +228,28 @@ await step('a pending spawn survives a restart', async () => {
   assert.equal(out.trim(), 'started');
   assert.equal(events('action_spawned', c).length, 1);
 });
+await step('unanswered: open, read-only-in-Teams, direct replies, unsure without the model', async () => {
+  const { unanswered } = await import(`${L}/api.mjs`);
+  const c = conv(14); setup(c, 'Spawn unanswered');
+  const q = await say(c, 'asker', 'Can we resend a statement email?');
+  await say(c, 'owner', 'Yes, from the statements tab.', { parentMessageId: q });
+  const q2 = await say(c, 'asker', 'Is there an audit log for refunds?');
+  d.prepare('UPDATE convs SET my_horizon = ? WHERE id = ?').run(Number(q2), c); // read in Teams: still open
+  const all = await unanswered({ days: 1, llm: false, all: true });
+  const g = all.find(x => x.conv === c);
+  assert.equal(g.status, 'open'); assert.equal(g.key, `teams:${c}:${q2}`);
+  assert.deepEqual(g.messages.map(m => m.id), [q2]);
+  const rows = await unanswered({ days: 1, llm: false });
+  assert.equal(rows.find(x => x.conv === conv(5))?.status, 'maybe_answered'); // owner wrote, topic unknown
+  const c3 = rows.find(x => x.conv === conv(3));
+  assert.equal(c3.status, 'open'); assert.deepEqual(c3.others_replied, ['Test Bob']);
+  assert.ok(rows.find(x => x.conv === conv(1))?.research?.[0]?.link?.startsWith('t3://'), 'links the research thread');
+});
 await step('rules validate the new fields', async () => {
   const { validate } = await import(`${L}/rules.mjs`);
   assert.deepEqual(validate(rule({ delay_minutes: 4, quiet_minutes: 2, max_wait_minutes: 20, recheck: 'plain', skip_if_read: false })), []);
-  const errs = validate(rule({ delay_minutes: -1, recheck: 'maybe', skip_if_read: 'no' }));
-  assert.equal(errs.length, 3);
+  const errs = validate(rule({ delay_minutes: -1, recheck: 'maybe', skip_if_read: 'no', active_delay_minutes: 999 }));
+  assert.equal(errs.length, 4);
 });
 if (process.env.TEAMS_BRIDGE_TEST_LLM) {
   kvSet('llm_budget', { hour: new Date().toISOString().slice(0, 13), n: 0 });
@@ -225,12 +263,36 @@ if (process.env.TEAMS_BRIDGE_TEST_LLM) {
     await say(c, 'carol', 'The refund retry job only picks failed refunds with fewer than 3 attempts, see RetryService.');
     await say(c, 'bob', 'Deploying the statements service to staging now, ignore the alerts.');
     await flushForwards();
-    const sent = t3calls().slice(before);
+    const th = JSON.parse(d.prepare('SELECT v FROM kv WHERE k = ?').get(`session:ask-research:0:${c}`).v).threadId;
+    const sent = t3calls().slice(before).filter(x => x.argv[2] === th);
     assert.equal(sent.length, 1);
     assert.match(sent[0].stdin, /fewer than 3 attempts/); assert.doesNotMatch(sent[0].stdin, /lunch|staging/);
   });
+  await step('[model] the owner answering something else in a busy chat does not skip the spawn', async () => {
+    const c2 = conv(13); setup(c2, 'Spawn busy owner');
+    writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule()));
+    await say(c2, 'asker', 'Why did the nightly invoice sync skip three clients yesterday?');
+    await say(c2, 'carol', 'Can someone approve my PR for the login page?');
+    await say(c2, 'owner', 'Approved, go ahead and merge.');
+    await processSpawns({ now: pending(c2).due_at + 1 });
+    await settled(() => events('action_spawned', c2).length || events('spawn_skipped', c2).length, 'the re-check', 60e3);
+    assert.equal(events('spawn_skipped', c2).length, 0, JSON.stringify(events('spawn_skipped', c2)[0]?.data));
+    await say(c2, 'owner', 'About the invoice sync: those three clients have sync disabled in their settings.');
+  });
+  await step('[model] unanswered: an unrelated owner message leaves it open, a related one answers it', async () => {
+    const { unanswered } = await import(`${L}/api.mjs`);
+    let rows = await unanswered({ days: 1, all: true });
+    assert.equal(rows.find(x => x.conv === conv(13))?.status, 'answered');
+    const c3 = conv(15); setup(c3, 'Spawn unanswered busy');
+    await say(c3, 'asker', 'Do we support refunds to a different card than the original?');
+    await say(c3, 'carol', 'Who is joining the planning call at 3?');
+    await say(c3, 'owner', 'I will join the planning call.');
+    rows = await unanswered({ days: 1, all: true });
+    assert.equal(rows.find(x => x.conv === c3)?.status, 'open');
+  });
   await step('[model] a new topic from the asker while the thread is live gets its own delayed thread', async () => {
     writeFileSync(`${P.rulesDir}/ask-research.json`, JSON.stringify(rule()));
+    kvSet('action_rate:ask-research:0', { hour: '', n: 0 }); // earlier scenarios used up the hourly cap
     const first = JSON.parse(d.prepare('SELECT v FROM kv WHERE k = ?').get(`session:ask-research:0:${c}`).v);
     const before = t3calls().length;
     await say(c, 'asker', 'Separate question: why do card surcharges show twice on the statement PDF?');
